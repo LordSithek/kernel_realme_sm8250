@@ -211,11 +211,6 @@ bool __attribute__((weak)) oplus_is_ptcrb_version(void)
 	return false;
 }
 
-void __attribute__((weak)) oplus_set_otg_switch_status(bool value)
-{
-        return;
-}
-
 /****************************************/
 #define RESET_MCU_DELAY_30S		6
 static int reset_mcu_delay = 0;
@@ -948,7 +943,7 @@ int oplus_battery_get_property(struct power_supply *psy,
 			break;
 #endif
 		case POWER_SUPPLY_PROP_CHARGE_FULL:
-			val->intval = chip->batt_capacity_mah * 1000;
+			val->intval = chip->batt_fcc * 1000;
 			break;
 		default:
 			pr_err("get prop %d is not supported in batt\n", psp);
@@ -2841,11 +2836,29 @@ static void oplus_chg_awake_init(struct oplus_chg_chip *chip)
 	if (!chip) {
 		return;
 	}
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0))
+	wake_lock_init(&chip->suspend_lock, WAKE_LOCK_SUSPEND, "battery suspend wakelock");
+
+#else
 	chip->suspend_ws = wakeup_source_register(NULL, "battery suspend wakelock");
+#endif
 }
 
 static void oplus_chg_set_awake(struct oplus_chg_chip *chip, bool awake)
 {
+#if (LINUX_VERSION_CODE < KERNEL_VERSION(4, 9, 0))
+	if (chip->unwakelock_chg == 1 && awake == true) {
+		charger_xlog_printk(CHG_LOG_CRTI,
+			"error, unwakelock testing, can not set wakelock.\n");
+		return;
+	}
+
+	if (awake){
+		wake_lock(&chip->suspend_lock);
+	} else {
+		wake_unlock(&chip->suspend_lock);
+	}
+#else
 	static bool pm_flag = false;
 
 	if (chip->unwakelock_chg == 1 && awake == true) {
@@ -2859,11 +2872,12 @@ static void oplus_chg_set_awake(struct oplus_chg_chip *chip, bool awake)
 
 	if (awake && !pm_flag) {
 		pm_flag = true;
-		__pm_wakeup_event(chip->suspend_ws, 500);
+		__pm_stay_awake(chip->suspend_ws);
 	} else if (!awake && pm_flag) {
 		__pm_relax(chip->suspend_ws);
 		pm_flag = false;
 	}
+#endif
 }
 
 #if (LINUX_VERSION_CODE < KERNEL_VERSION(5, 4, 0))
@@ -5830,9 +5844,9 @@ int oplus_chg_get_fv_when_vooc(struct oplus_chg_chip *chip)
 static void oplus_chg_set_iterm(struct oplus_chg_chip *chip)
 {
 	int iterm =  chip->limits.iterm_ma;
-
+	
 	if (oplus_voocphy_get_bidirect_cp_support()) {
-		iterm = 2 * iterm;
+		iterm = 2 * iterm; 
 	}
 	chip->chg_ops->term_current_set(chip->limits.iterm_ma);
 }
@@ -6939,7 +6953,7 @@ static int fb_notifier_callback(struct notifier_block *nb,
 		if (event == FB_EVENT_BLANK) {
 			blank = *(int *)evdata->data;
 			if (blank == FB_BLANK_UNBLANK) {
-				g_charger_chip->led_on = false;
+				g_charger_chip->led_on = true;
 				g_charger_chip->led_on_change = true;
 			} else if (blank == FB_BLANK_POWERDOWN) {
 				g_charger_chip->led_on = false;
@@ -7853,8 +7867,6 @@ static void oplus_chg_variables_init(struct oplus_chg_chip *chip)
 	chip->aicl_done = false;
 	chip->parallel_error_flag = 0;
 	chip->soc_not_full_report = false;
-
-	oplus_set_otg_switch_status(true);
 }
 
 static void oplus_chg_fail_action(struct oplus_chg_chip *chip)
@@ -9836,7 +9848,7 @@ static void oplus_chg_fast_switch_check(struct oplus_chg_chip *chip)
 		return;
 	}
 
-	if (oplus_pps_get_chg_status() != PPS_NOT_SUPPORT && chip->pps_force_svooc == false
+	if (oplus_pps_get_chg_status() != PPS_NOT_SUPPORT && chip->pps_force_svooc == false 
 				&& chip->chg_ops->oplus_chg_get_pd_type() == PD_PPS_ACTIVE) {
 			return;
 	}
